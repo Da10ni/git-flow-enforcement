@@ -1,0 +1,205 @@
+#!/bin/sh
+
+echo "Remote: $1"
+echo "URL: $2"
+
+# Get current branch
+current_branch=$(git rev-parse --abbrev-ref HEAD)
+echo "Current branch: $current_branch"
+
+# Block direct pushes to protected branches
+case "$current_branch" in
+    main|master|development|develop)
+        echo "" >&2
+        echo "❌ =================================" >&2
+        echo "❌ DIRECT PUSH BLOCKED!" >&2
+        echo "❌ Branch: $current_branch" >&2
+        echo "❌ Use Pull Request workflow!" >&2
+        echo "❌ =================================" >&2
+        echo "" >&2
+        echo "✅ Correct workflow:" >&2
+        echo "   1. git checkout -b feature/your-feature" >&2
+        echo "   2. git push origin feature/your-feature" >&2
+        echo "   3. Create Pull Request on GitHub" >&2
+        echo "" >&2
+        exit 1
+        ;;
+esac
+
+# Function to check if branch was created from specific parent
+check_parent_branch() {
+    local branch=$1
+    local expected_parent=$2
+    
+    # Check if branch already exists on remote (skip parent check)
+    if git ls-remote --heads origin "$branch" 2>/dev/null | grep -q .; then
+        echo "✅ Branch already exists on remote"
+        return 0
+    fi
+    
+    # For new branches, check immediate parent
+    echo "🔍 Checking immediate parent branch for new branch..."
+    
+    # Get the expected parent's latest commit
+    local parent_commit=$(git rev-parse "$expected_parent" 2>/dev/null || echo "")
+    if [ -z "$parent_commit" ]; then
+        echo "❌ Parent branch '$expected_parent' not found locally!"
+        echo "ℹ️  Try: git fetch origin && git checkout $expected_parent"
+        return 1
+    fi
+    
+    # Method 1: Check if current branch's first commit is directly from expected parent
+    # Get the first commit of current branch that's not in expected parent
+    local first_unique_commit=$(git rev-list --reverse "$expected_parent..HEAD" | head -n 1)
+    
+    if [ -z "$first_unique_commit" ]; then
+        echo "✅ Branch has no unique commits (same as $expected_parent)"
+        return 0
+    fi
+    
+    # Get the parent of the first unique commit
+    local actual_parent=$(git rev-parse "$first_unique_commit^" 2>/dev/null || echo "")
+    
+    # Check if the actual parent is the tip of expected parent branch
+    if [ "$actual_parent" = "$parent_commit" ]; then
+        echo "✅ Branch was created directly from $expected_parent"
+        return 0
+    fi
+    
+    # Method 2: Alternative check using reflog (if available)
+    # This checks the reflog to see where the branch was created from
+    local branch_creation=$(git reflog show --format="%H %gs" "$current_branch" 2>/dev/null | grep "branch: Created from" | head -n 1)
+    
+    if echo "$branch_creation" | grep -q "$expected_parent"; then
+        echo "✅ Branch was created from $expected_parent (via reflog)"
+        return 0
+    fi
+    
+    # Method 3: Check if all commits from expected parent are in current branch
+    # AND current branch was diverged from expected parent recently
+    local commits_behind=$(git rev-list --count "$current_branch..$expected_parent" 2>/dev/null || echo "999")
+    
+    if [ "$commits_behind" -eq 0 ]; then
+        # Current branch contains all commits from expected parent
+        # Now check if divergence point is recent (expected parent's tip)
+        local divergence_point=$(git merge-base "$current_branch" "$expected_parent")
+        
+        if [ "$divergence_point" = "$parent_commit" ]; then
+            echo "✅ Branch diverged from tip of $expected_parent"
+            return 0
+        fi
+    fi
+    
+    # If all methods fail, branch was not created from expected parent
+    echo "❌ Branch was NOT created directly from $expected_parent"
+    echo "ℹ️  Actual parent commit: $actual_parent"
+    echo "ℹ️  Expected parent commit: $parent_commit"
+    echo "ℹ️  Commits behind $expected_parent: $commits_behind"
+    return 1
+}
+
+# Validate branch patterns and parent branches
+case "$current_branch" in
+    hotfix/*)
+        echo "🏥 Validating hotfix branch: $current_branch"
+        
+        if ! check_parent_branch "$current_branch" "main"; then
+            echo "" >&2
+            echo "❌ =================================" >&2
+            echo "❌ HOTFIX MUST BE FROM MAIN!" >&2
+            echo "❌ Your branch: $current_branch" >&2
+            echo "❌ =================================" >&2
+            echo "" >&2
+            echo "✅ Correct workflow:" >&2
+            echo "   1. git checkout main" >&2
+            echo "   2. git pull origin main" >&2
+            echo "   3. git checkout -b $current_branch" >&2
+            echo "" >&2
+            echo "ℹ️  If you need to recreate the branch:" >&2
+            echo "   git branch -D $current_branch" >&2
+            echo "   git checkout main" >&2
+            echo "   git checkout -b $current_branch" >&2
+            echo "" >&2
+            exit 1
+        fi
+        ;;
+        
+    feature/*)
+        echo "✨ Validating feature branch: $current_branch"
+        
+        if ! check_parent_branch "$current_branch" "development"; then
+            echo "" >&2
+            echo "❌ =================================" >&2
+            echo "❌ FEATURE MUST BE FROM DEVELOPMENT!" >&2
+            echo "❌ Your branch: $current_branch" >&2
+            echo "❌ =================================" >&2
+            echo "" >&2
+            echo "✅ Correct workflow:" >&2
+            echo "   1. git checkout development" >&2
+            echo "   2. git pull origin development" >&2
+            echo "   3. git checkout -b $current_branch" >&2
+            echo "" >&2
+            echo "ℹ️  If you need to recreate the branch:" >&2
+            echo "   git branch -D $current_branch" >&2
+            echo "   git checkout development" >&2
+            echo "   git checkout -b $current_branch" >&2
+            echo "" >&2
+            exit 1
+        fi
+        ;;
+        
+    release/*)
+        echo "🚀 Validating release branch: $current_branch"
+        
+        if ! check_parent_branch "$current_branch" "development"; then
+            echo "" >&2
+            echo "❌ =================================" >&2
+            echo "❌ RELEASE MUST BE FROM DEVELOPMENT!" >&2
+            echo "❌ Your branch: $current_branch" >&2
+            echo "❌ =================================" >&2
+            echo "" >&2
+            echo "✅ Correct workflow:" >&2
+            echo "   1. git checkout development" >&2
+            echo "   2. git pull origin development" >&2
+            echo "   3. git checkout -b $current_branch" >&2
+            echo "" >&2
+            echo "ℹ️  If you need to recreate the branch:" >&2
+            echo "   git branch -D $current_branch" >&2
+            echo "   git checkout development" >&2
+            echo "   git checkout -b $current_branch" >&2
+            echo "" >&2
+            exit 1
+        fi
+        ;;
+        
+    bugfix/*)
+        echo "🐛 Bugfix branch pattern valid: $current_branch"
+        echo "ℹ️  Bugfix branches can be created from any parent"
+        ;;
+        
+    *)
+        echo "" >&2
+        echo "❌ =================================" >&2
+        echo "❌ Invalid branch pattern!" >&2
+        echo "❌ Your branch: $current_branch" >&2
+        echo "❌ =================================" >&2
+        echo "" >&2
+        echo "✅ Allowed patterns:" >&2
+        echo "   FROM main:" >&2
+        echo "   - hotfix/*  (urgent fixes)" >&2
+        echo "" >&2
+        echo "   FROM development:" >&2
+        echo "   - feature/* (new features)" >&2
+        echo "   - release/* (release prep)" >&2
+        echo "" >&2
+        echo "   FROM any branch:" >&2
+        echo "   - bugfix/*  (general fixes)" >&2
+        echo "" >&2
+        echo "Example: git branch -m feature/add-login" >&2
+        echo "" >&2
+        exit 1
+        ;;
+esac
+
+echo "✅ All checks passed! Push allowed!"
+exit 0  
