@@ -8,4 +8,5 @@ createRoot(document.getElementById('root')).render(
     <App />
   </StrictMode>,
   // featue branch made
+  // release branch made
 )
